@@ -1,0 +1,1646 @@
+---
+title: "McNelly Final Project Code"
+author: "Sam McNelly"
+date: "2022-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#load libraries
+library(tidyverse, vroom, haven)
+
+pacman::p_load(readr, tidyverse, nnet, MASS, funModeling, brant, broom, jtools, car, blorr, lmtest, broom, readr)
+
+#Import data from folder on my computer
+abortion<-read_dta("/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/Guttmacher 2014 APS.dta")
+
+#import again for separate dataset to use for imputation
+abortion1<-read_dta("/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/Guttmacher 2014 APS.dta")
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Variable creation 
+```{r}
+#Method of payment for abortion
+
+#re-classify all input variables as factor (if not already factor)
+class(abortion$payreimb)
+abortion$payreimb<-as.factor(abortion$payreimb)
+class(abortion$payreimb)
+
+class(abortion$payins)
+abortion$payins<-as.factor(abortion$payins)
+class(abortion$payins)
+
+class(abortion$paymcaid)
+abortion$paymcaid<-as.factor(abortion$paymcaid)
+class(abortion$paymcaid)
+
+class(abortion$payself)
+abortion$payself<-as.factor(abortion$payself)
+class(abortion$payself)
+
+class(abortion$payasst)
+abortion$payasst<-as.factor(abortion$payasst)
+class(abortion$payasst)
+
+class(abortion$paycut)
+abortion$paycut<-as.factor(abortion$paycut)
+class(abortion$paycut)
+
+class(abortion$payotro)
+abortion$payotro<-as.factor(abortion$payotro)
+class(abortion$payotro)
+
+class(abortion$payotrob)
+abortion$payotrob<-as.factor(abortion$payotrob)
+class(abortion$payotrob)
+
+#Make single categorical variable, collapsing some similar response options together (all options for "payotro" and payotrob" together (receiving funds from family, friends, partner, or an informal loan from those sources are one variable), and "payreimb" and "payins" together (so any payment from insurance, whether up front or subsequent reimbursement are one variable).
+abortion<-abortion%>%
+    mutate(payment=case_when(
+      payreimb=="1" ~ 1, 
+      payins=="1" ~ 1,
+      paymcaid=="1" ~ 2,
+      payself=="1" ~ 3, 
+      payasst=="1" ~ 4,
+      paycut=="1" ~ 5, 
+      payotro=="1" ~ 6,
+      payotrob=="1" ~ 6,
+      payotrob=="3" ~ 6,
+      payotrob=="4" ~ 6
+    ))
+
+#Convert this to factor and apply labels 
+abortion$payment<-factor(abortion$payment, levels= c(1,2,3,4,5,6), labels = c("Private Insurance", "Medicaid", "Self/ Out of pocket", "Received financial assistance", "Price reduction", "Friends/family/ partner/loan"))
+
+#check class and summarize variable
+class(abortion$payment)
+table(abortion$payment)
+
+
+
+#Make binary variables for payment types for multicollinearity and Cook's distance testing (will come back to this testing later)
+
+#Difficult life events in the 12-months leading up to the abortion
+
+#First, reclassify each individual difficult life event variable/question as a factor
+
+#Death of a close family member or friend in the past year
+class(abortion$death)
+abortion$death<-as.factor(abortion$death)
+class(abortion$death)
+table(abortion$death)
+
+#Falling behind on rent or mortgage in the past year
+class(abortion$rent)
+abortion$rent<-as.factor(abortion$rent)
+class(abortion$rent)
+table(abortion$rent)
+
+#Breaking up with partner/spouse in the last year
+class(abortion$breakup)
+abortion$breakup<-as.factor(abortion$breakup)
+class(abortion$breakup)
+table(abortion$breakup)
+
+#Being unemployed and looking for work for at least a month in the last year 
+class(abortion$nowork)
+abortion$nowork<-as.factor(abortion$nowork)
+class(abortion$nowork)
+table(abortion$nowork)
+
+#Dependent or close family member had a serious medical problem in the last year
+class(abortion$fammmed)
+abortion$fammed<-as.factor(abortion$fammed)
+class(abortion$fammed)
+table(abortion$fammed)
+
+#Had a baby in the last year
+class(abortion$hadbaby)
+abortion$hadbaby<-as.factor(abortion$hadbaby)
+class(abortion$hadbaby)
+table(abortion$hadbaby)
+
+#Partner who was arrested or incarcerated in the last year
+class(abortion$partjail)
+abortion$partjail<-as.factor(abortion$partjail)
+class(abortion$partjail)
+table(abortion$partjail)
+
+#Having moved 2 or more times in the last year
+class(abortion$moved)
+abortion$moved<-as.factor(abortion$moved)
+class(abortion$moved)
+table(abortion$moved)
+
+
+#Build binary variable based on the above difficult life events experienced in the last year
+
+abortion<-abortion %>%
+  mutate(dif_events_yn= case_when(
+    death=="1" ~ 1,
+    rent=="1" ~ 1,
+    breakup=="1" ~ 1,
+    nowork== "1" ~ 1, 
+    fammed=="1" ~ 1,
+    hadbaby=="1" ~ 1,
+    partjail=="1" ~ 1,
+    moved=="1" ~ 1,
+    death=="0" ~ 0,
+    rent=="0" ~ 0,
+    breakup=="0" ~ 0,
+    nowork== "0" ~ 0, 
+    fammed=="0" ~ 0,
+    hadbaby=="0" ~ 0,
+    partjail=="0" ~ 0,
+    moved=="0" ~ 0
+  ))
+class(abortion$dif_events_yn)
+
+#Convert to factor variable and apply labels 
+abortion$dif_events_yn<-factor(abortion$dif_events_yn, levels= c(0,1), labels = c("No difficult life events", "Experienced at least one difficult life event"))
+
+summary(abortion$dif_events_yn)
+
+#Now I'll make a count variable capturing how many difficult life events someone has experienced in the last year
+
+#First I have to create numerical versions of each of the individual difficult life events variables, and recode the values as 0/1 instead of 1/2
+
+abortion$death_num<-as.numeric(abortion$death)
+class(abortion$death_num)
+table(abortion$death_num)
+abortion$death_num[abortion$death_num == 1] <- 0
+abortion$death_num[abortion$death_num == 2] <- 1
+table(abortion$death_num)
+class(abortion$death_num)
+
+abortion$rent_num<-as.numeric(abortion$rent)
+class(abortion$rent_num)
+table(abortion$rent_num)
+abortion$rent_num[abortion$rent_num == 1] <- 0
+abortion$rent_num[abortion$rent_num == 2] <- 1
+table(abortion$rent_num)
+class(abortion$rent_num)
+
+abortion$breakup_num<-as.numeric(abortion$breakup)
+class(abortion$breakup_num)
+table(abortion$breakup_num)
+abortion$breakup_num[abortion$breakup_num == 1] <- 0
+abortion$breakup_num[abortion$breakup_num == 2] <- 1
+table(abortion$breakup_num)
+class(abortion$breakup_num)
+
+abortion$nowork_num<-as.numeric(abortion$nowork)
+class(abortion$nowork_num)
+table(abortion$nowork_num)
+abortion$nowork_num[abortion$nowork_num == 1] <- 0
+abortion$nowork_num[abortion$nowork_num == 2] <- 1
+table(abortion$nowork_num)
+class(abortion$nowork_num)
+summary(abortion$nowork_num)
+
+
+abortion$fammed_num<-as.numeric(abortion$fammed)
+class(abortion$fammed_num)
+table(abortion$fammed_num)
+abortion$fammed_num[abortion$fammed_num == 1] <- 0
+abortion$fammed_num[abortion$fammed_num == 2] <- 1
+table(abortion$fammed_num)
+class(abortion$fammed_num)
+summary(abortion$fammed_num)
+
+abortion$hadbaby_num<-as.numeric(abortion$hadbaby)
+class(abortion$hadbaby_num)
+table(abortion$hadbaby_num)
+abortion$hadbaby_num[abortion$hadbaby_num == 1] <- 0
+abortion$hadbaby_num[abortion$hadbaby_num == 2] <- 1
+table(abortion$hadbaby_num)
+class(abortion$hadbaby_num)
+summary(abortion$hadbaby_num)
+
+
+abortion$partjail_num<-as.numeric(abortion$partjail)
+class(abortion$partjail_num)
+table(abortion$partjail_num)
+abortion$partjail_num[abortion$partjail_num == 1] <- 0
+abortion$partjail_num[abortion$partjail_num == 2] <- 1
+table(abortion$partjail_num)
+class(abortion$partjail_num)
+summary(abortion$partjail_num)
+
+
+abortion$moved_num<-as.numeric(abortion$moved)
+class(abortion$moved_num)
+table(abortion$moved_num)
+abortion$moved_num[abortion$moved_num == 1] <- 0
+abortion$moved_num[abortion$moved_num == 2] <- 1
+table(abortion$moved_num)
+class(abortion$moved_num)
+summary(abortion$moved_num)
+
+
+abortion<-abortion %>%
+  mutate(dif_events_num=(death_num+rent_num+breakup_num+nowork_num+fammed_num+hadbaby_num+partjail_num+moved_num))
+    
+summary(abortion$dif_events_num)
+table(abortion$dif_events_num)
+
+```
+
+
+Demographic variables
+```{r}
+
+#Age (importing the already created categorical variable)
+abortion$age_cat<-abortion$rage
+
+#convert to factor and apply labels
+abortion$age_cat<-factor(abortion$age_cat, levels= c(1,2,3,4,5,6), labels = c("<15-17", "18-19", "20-24", "25-29", "30-34", "35+"))
+
+summary(abortion$age_cat)
+
+
+#Race 
+class(abortion$newraceth)
+
+#Convert to factor 
+abortion$newraceth1<-as.factor(abortion$newraceth)
+class(abortion$newraceth1)
+summary(abortion$newraceth1)
+
+#mutate new race_eth variable with collapsing two categories together (Other and Multiracial)
+abortion<-abortion %>%
+  mutate(race_eth_cat= case_when(
+    newraceth1=="1" ~ 1,
+    newraceth1=="2" ~ 2,
+    newraceth1=="3" ~ 3,
+    newraceth1=="4" ~ 4, 
+    newraceth1=="5" ~ 5,
+    newraceth1=="6" ~ 5,
+    newraceth1=="7" ~ 6
+  ))
+
+abortion$race_eth_cat<-factor(abortion$race_eth_cat, levels= c(1,2,3,4,5,6), labels = c("American Indian", "API", "Black", "White", "Other/Multiracial", "Hispanic"))
+
+class(abortion$race_eth_cat)
+summary(abortion$race_eth_cat)
+
+
+
+#Sexual orientation
+
+class(abortion$sexuality)
+
+#First recode both input variables as factors
+
+abortion$sexuality<-as.factor(abortion$sexuality)
+class(abortion$sexuality)
+
+abortion<-abortion %>%
+  mutate(sex_orient= case_when(
+    sexuality=="1" ~ 1,
+    sexuality=="2" ~ 2,
+    sexuality=="3" ~ 3,
+    sexuality=="4" ~ 4, 
+  ))
+#convert to factor and apply labels
+abortion$sex_orient<-factor(abortion$sex_orient, levels= c(1,2,3,4), labels = c("Heterosexual", "Gay/lesbian", "Bisexual", "Something else"))
+
+summary(abortion$sex_orient)
+class(abortion$sex_orient)
+
+
+#Federal poverty level categories
+abortion$poverty<-(abortion$povcat3)
+summary(abortion$poverty)
+class(abortion$poverty)
+
+#convert to factor and apply labels
+abortion$poverty<-factor(abortion$poverty, levels= c(1,2,3), labels = c("<100% FPL", "100-200% FPL", "200+% FPL"))
+summary(abortion$poverty)
+
+
+#Marital status (combining response options for divorced, widowed, and separated to be the same variable)
+abortion$marstat<-as.factor(abortion$imarstat)
+class(abortion$marstat)
+summary(abortion$marstat)
+
+abortion<-abortion %>%
+  mutate(married= case_when(
+    marstat=="1" ~ 1,
+    marstat=="2" ~ 2,
+    marstat=="3" ~ 2,
+    marstat=="4" ~ 2, 
+    marstat=="5" ~ 3
+  ))
+
+#convert to factor and apply labels
+abortion$married<-factor(abortion$married, levels= c(1,2,3), labels = c("Married", "Divorced/Widowed/Separated", "Never married"))
+
+summary(abortion$married)
+
+
+#Number of people respondent lives with (including children)
+abortion$hh_mem_num<-as.numeric(abortion$nfammem)
+table(abortion$hh_mem_num)
+
+#Religion
+abortion$relig<-abortion$irelig
+summary(abortion$relig)
+class(abortion$relig)
+
+#convert to factor and apply labels
+abortion$relig<-factor(abortion$relig, levels= c(1,2,3,4,5), labels = c("Protestant", "Catholin", "Jewish", "Other", "none"))
+
+class(abortion$relig)
+summary(abortion$relig)
+
+
+#Number of previous births
+abortion$pre_births<-abortion$iprebir
+class(abortion$pre_births)
+summary(abortion$pre_births)
+table(abortion$pre_births)
+
+
+#Any previous abortions (y/n)
+abortion$pre_abort<-abortion$iabort
+class(abortion$pre_abort)
+table(abortion$pre_abort)
+
+#Convert to factor and apply labels 
+abortion$pre_abort<-factor(abortion$pre_abort, levels= c(0,1), labels= c("No previous abortion", "At least one previous abortion"))
+class(abortion$pre_abort)
+
+summary(abortion$pre_abort)
+table(abortion$pre_abort)
+
+#Number of previous abortions
+abortion$num_pre_abort<-abortion$nabort
+class(abortion$num_pre_abort)
+summary(abortion$num_pre_abort)
+table(abortion$num_pre_abort)
+
+
+
+#Physical violence perpetrated by father of the current pregnancy
+abortion$phys_vio<-abortion$manhit
+class(abortion$phys_vio)
+summary(abortion$phys_vio)
+
+#Convert to factor and apply labels 
+abortion$phys_vio<-factor(abortion$phys_vio, levels= c(1,2), labels= c("Yes", "No"))
+class(abortion$phys_vio)
+summary(abortion$phys_vio)
+
+
+#Sexual violence perpetrated by father of the current pregnancy
+abortion$sex_vio<-abortion$manforce
+class(abortion$sex_vio)
+
+#Convert to factor and apply labels 
+abortion$sex_vio<-factor(abortion$sex_vio, levels= c(1,2), labels= c("Yes", "No"))
+class(abortion$sex_vio)
+summary(abortion$sex_vio)
+
+```
+
+
+
+Imputations and prep... pray for me. 
+```{r}
+#load relevant packages
+pacman::p_load(VIM, mice, lattice)
+
+#I will inspect the missingness using margin plots for each of the variables with significant missingness (sexual orientation, sexual violence, physical violence, and whether someone has been unemployed in the past year) using a smaller data subset that only includes the variables being used for this analysis. 
+
+#Dataset reduced to only include relevant variables from original dataset
+abortion3=subset(abortion1, select = c(payreimb, payins, paymcaid, payself, payasst, paycut, payotro, payotrob, death, rent, breakup, nowork, fammed, hadbaby, partjail, moved, rage, newraceth, sexuality, otrosex, povcat3, imarstat, nfammem, irelig, iprebir, iabort, nabort, manhit, manforce) )
+
+marginplot(abortion3[,c("sexuality","manforce")], col=c("blue","red","orange"), cex=1,
+cex.lab=1, cex.numbers=0.7, pch=20) 
+#323 observations are missing data for both sexual orientation and sexual violence, and 424 observations are missing one variable or the other. 
+
+marginplot(abortion3[,c("sexuality","manhit")], col=c("blue","red","orange"), cex=1,
+cex.lab=1, cex.numbers=0.7, pch=20) 
+#325 observations are missing data for both sexual orientation and physical abuse, 428 are missing one or the other.
+
+marginplot(abortion3[,c("sexuality","nowork")], col=c("blue","red","orange"), cex=1,
+cex.lab=1, cex.numbers=0.7, pch=20) 
+#shows just 1 missing observation for unemployment. 
+
+marginplot(abortion3[,c("manforce","manhit")], col=c("blue","red","orange"), cex=1,
+cex.lab=1, cex.numbers=0.7, pch=20) 
+#389 observations are missing both sexual and physical violence, and 428 observations are missing one or the other
+
+marginplot(abortion3[,c("manforce","nowork")], col=c("blue","red","orange"), cex=1,
+cex.lab=1, cex.numbers=0.7, pch=20) 
+#This just shows one missing value for unemployment
+
+marginplot(abortion3[,c("manhit","nowork")], col=c("blue","red","orange"), cex=1,
+cex.lab=1, cex.numbers=0.7, pch=20) 
+#This just shows one missing value for unemployment
+
+#can also use pbox to inspect missingness, not as useful because these are categorical variables
+
+which( colnames(abortion3)=="manhit" )
+which( colnames(abortion3)=="manforce" )
+which( colnames(abortion3)=="nowork" )
+which( colnames(abortion3)=="sexuality" )
+
+pbox(abortion3, pos=28) #physical abuse
+pbox(abortion3, pos=29) #sexual abuse
+pbox(abortion3, pos=12) #unemployment
+pbox(abortion3, pos=19) #sexual orientation
+
+#We will go ahead and proceed with the imputation
+```
+
+
+
+```{r}
+
+#using the smaller dataset just with the needed variables in order to do the imputation. 
+
+abortion3=subset(abortion1, select = c(payreimb, payins, paymcaid, payself, payasst, paycut, payotro, payotrob, death, rent, breakup, nowork, fammed, hadbaby, partjail, moved, rage, newraceth, sexuality, otrosex, povcat3, imarstat, nfammem, irelig, iprebir, iabort, nabort, manhit, manforce) )
+
+
+#reclassify all variables so the imputation will run
+abortion3$payreimb=as.factor(abortion3$payreimb)
+abortion3$payins=as.factor(abortion3$payins)
+abortion3$paymcaid=as.factor(abortion3$paymcaid)
+abortion3$payself=as.factor(abortion3$payself)
+abortion3$payasst=as.factor(abortion3$payasst)
+abortion3$paycut=as.factor(abortion3$paycut)
+abortion3$payotro=as.factor(abortion3$payotro)
+abortion3$payotrob=as.factor(abortion3$payotrob)
+abortion3$death=as.numeric(abortion3$death)
+abortion3$rent=as.numeric(abortion3$rent)
+abortion3$breakup=as.numeric(abortion3$breakup)
+abortion3$nowork=as.numeric(abortion3$nowork)
+abortion3$fammed=as.numeric(abortion3$fammed)
+abortion3$hadbaby=as.numeric(abortion3$hadbaby)
+abortion3$partjail=as.numeric(abortion3$partjail)
+abortion3$moved=as.numeric(abortion3$moved)
+abortion3$rage=as.numeric(abortion3$rage)
+abortion3$newraceth=as.factor(abortion3$newraceth)
+abortion3$sexuality=as.factor(abortion3$sexuality)
+abortion3$otrosex=as.factor(abortion3$otrosex)
+abortion3$povcat3=as.factor(abortion3$povcat3)
+abortion3$imarstat=as.factor(abortion3$imarstat)
+abortion3$nfammem=as.numeric(abortion3$nfammem)
+abortion3$irelig=as.factor(abortion3$irelig)
+abortion3$iprebir=as.numeric(abortion3$iprebir)
+abortion3$iabort=as.factor(abortion3$iabort)
+abortion3$nabort=as.numeric(abortion3$nabort)
+abortion3$manhit=as.factor(abortion3$manhit)
+abortion3$manforce=as.factor(abortion3$manforce)
+
+
+#install labelled package so I can remove variable labels so imputation will work 
+install.packages(labelled)
+library(labelled)
+
+
+#remove variable and value labels (not sure if this was ultimately necessary to get the imputation to run, but it was part of the troubleshooting I did when things weren't working, and I don't want to lose the code!)
+var_label(abortion3$payreimb) <- NULL
+remove_val_labels(abortion3$payreimb)
+
+var_label(abortion3$payins) <- NULL
+remove_val_labels(abortion3$payins)
+
+var_label(abortion3$paymcaid) <- NULL
+remove_val_labels(abortion3$paymcaid)
+
+var_label(abortion3$payself) <- NULL
+remove_val_labels(abortion3$payself)
+
+var_label(abortion3$payasst) <- NULL
+remove_val_labels(abortion3$payasst)
+
+var_label(abortion3$paycut) <- NULL
+remove_val_labels(abortion3$paycut)
+
+var_label(abortion3$payotro) <- NULL
+remove_val_labels(abortion3$payotro)
+
+var_label(abortion3$payotrob) <- NULL
+remove_val_labels(abortion3$payotrob)
+
+var_label(abortion3$death) <- NULL
+remove_val_labels(abortion3$death)
+
+var_label(abortion3$rent) <- NULL
+remove_val_labels(abortion3$rent)
+
+var_label(abortion3$breakup) <- NULL
+remove_val_labels(abortion3$breakup)
+
+var_label(abortion3$nowork) <- NULL
+remove_val_labels(abortion3$nowork)
+
+var_label(abortion3$fammed) <- NULL
+remove_val_labels(abortion3$fammed)
+
+var_label(abortion3$hadbaby) <- NULL
+remove_val_labels(abortion3$hadbaby)
+
+var_label(abortion3$partjail) <- NULL
+remove_val_labels(abortion3$partjail)
+
+var_label(abortion3$moved) <- NULL
+remove_val_labels(abortion3$moved)
+
+var_label(abortion3$rage) <- NULL
+remove_val_labels(abortion3$rage)
+
+var_label(abortion3$newraceth) <- NULL
+remove_val_labels(abortion3$newraceth)
+
+var_label(abortion3$sexuality) <- NULL
+remove_val_labels(abortion3$sexuality)
+
+var_label(abortion3$otrosex) <- NULL
+remove_val_labels(abortion3$otrosex)
+
+var_label(abortion3$povcat3) <- NULL
+remove_val_labels(abortion3$povcat3)
+
+var_label(abortion3$imarstat) <- NULL
+remove_val_labels(abortion3$imarstat)
+
+var_label(abortion3$nfammem) <- NULL
+remove_val_labels(abortion3$nfammem)
+
+var_label(abortion3$irelig) <- NULL
+remove_val_labels(abortion3$irelig)
+
+var_label(abortion3$iprebir) <- NULL
+remove_val_labels(abortion3$iprebir)
+
+var_label(abortion3$iabort) <- NULL
+remove_val_labels(abortion3$iabort)
+
+var_label(abortion3$nabort) <- NULL
+remove_val_labels(abortion3$nabort)
+
+var_label(abortion3$manhit) <- NULL
+remove_val_labels(abortion3$manhit)
+
+var_label(abortion3$manforce) <- NULL
+remove_val_labels(abortion3$manforce)
+
+
+
+#run the imputation (drumroll, please)
+abortion_imp<-mice(abortion3, m=5, maxit=5, seed=1212) 
+
+```
+
+
+Diagnostics for imputation model
+```{r}
+
+# Obtain the first complete dataset in a normal dataframe for review using the complete function from the mice package. This is only using the data imputed from the first imputation. We will stick with this single imputation of data per conversations with Dr. Johnson, and keeping things a bit neater given the large number of categorical variables.
+abortion_imp1<-mice::complete(data=abortion_imp, action=1) 
+
+
+## Let's look at the imputed to the non-imputed data to see how the distributions compare using the function stripplot 
+
+#sexuality
+stripplot(abortion_imp, data=sexuality~.imp, jit=TRUE,  pch=20,  xlab="1=Non-missing, Imputation number") 
+#a little funky to look at because they're all categorical variables, but it looks fine
+
+#manhit
+stripplot(abortion_imp, data=manhit~.imp, jit=TRUE,  pch=20,  xlab="1=Non-missing, Imputation number") 
+#same, a little odd because they are categorical, but looks fine
+
+# manforce
+stripplot(abortion_imp, data=manforce~.imp, jit=TRUE, pch=20,  xlab="1=Non-missing, Imputation number")
+#same as above
+
+# nowork
+stripplot(abortion_imp, data=nowork~.imp, jit=TRUE, pch=20,  xlab="1=Non-missing, Imputation number")
+#there was only one missing value for nowork, so it makes sense it looks a little different. seems fine. 
+
+```
+
+
+
+Now let's see how our imputation worked
+```{r}
+## Analysis of imputed data using a multinomial regression model 
+test1<- glm(manhit~rage + povcat3 + imarstat, data=abortion_imp1, family= "binomial")# run binomial logistic regression just to test the data-- this is not my model, just using this to test the imputation
+
+summary(test1)
+
+fit <-with(abortion_imp, glm(manhit~rage +povcat3 + imarstat, family= "binomial")) # get regression coefficients 
+
+summary(fit)
+
+pool(fit) # pool regression coefficients and standard errors using pool function. All the statistics can be interpreted.
+
+
+summary(pool(fit)) # get summary of pooled estimates.
+
+#How does the imputed data compare to the non-imputed data analysis? How different are the coefficients?  
+Complete_case<-glm(manhit~rage + povcat3 + imarstat, data=abortion3, family= "binomial")
+summary(Complete_case)
+
+##Estimates are very slightly different, but not significantly or alarmingly so, indicating the imputed data isn't highly biased. Can proceed using the imputed data. (Also checked this later on with my actual models). 
+
+```
+
+
+Now I'm going to re-run all the variable creation code from above using the newly imputed data. 
+```{r}
+#save the old abortion dataset with the raw data and originally created variables (on the non-imputed data) just in case.
+abortion_old<-abortion
+
+#now I will rename the imputed data "abortion" so I can rerun the previous code exactly.
+
+abortion<-abortion_imp1
+
+#now I can rerun all the variable creation code
+
+
+#Method of payment for abortion
+
+#re-classify all input variables as factor
+class(abortion$payreimb)
+abortion$payreimb<-as.factor(abortion$payreimb)
+class(abortion$payreimb)
+
+class(abortion$payins)
+abortion$payins<-as.factor(abortion$payins)
+class(abortion$payins)
+
+class(abortion$paymcaid)
+abortion$paymcaid<-as.factor(abortion$paymcaid)
+class(abortion$paymcaid)
+
+class(abortion$payself)
+abortion$payself<-as.factor(abortion$payself)
+class(abortion$payself)
+
+class(abortion$payasst)
+abortion$payasst<-as.factor(abortion$payasst)
+class(abortion$payasst)
+
+class(abortion$paycut)
+abortion$paycut<-as.factor(abortion$paycut)
+class(abortion$paycut)
+
+class(abortion$payotro)
+abortion$payotro<-as.factor(abortion$payotro)
+class(abortion$payotro)
+
+class(abortion$payotrob)
+abortion$payotrob<-as.factor(abortion$payotrob)
+class(abortion$payotrob)
+
+#Make single categorical variable, collapsing some similar response options together (all options for "payotro" "payotrob" together (including receiving financial support from friends, family, partner, and other informal loan together in one variable),and  "payreimb" and "payins" together (so whether or not someone payed up-front with insurance or was reimbursed later from their insurance company is included in the same variable))
+abortion<-abortion%>%
+    mutate(payment=case_when(
+      payreimb=="1" ~ 0, 
+      payins=="1" ~ 0,
+      paymcaid=="1" ~ 1,
+      payself=="1" ~ 2, 
+      payasst=="1" ~ 3,
+      paycut=="1" ~ 4, 
+      payotro=="1" ~ 5,
+      payotrob=="1" ~ 5,
+      payotrob=="3" ~ 5,
+      payotrob=="4" ~ 5
+    ))
+
+#Convert this to factor and apply labels; set "private insurance" as the reference group
+abortion$payment<-factor(abortion$payment, levels= c(0,1,2,3,4,5), labels = c("Private Insurance", "Medicaid", "Self/ Out of pocket", "Received financial assistance", "Price reduction", "Friends/family/ partner/loan"))
+#private insurance is the reference group
+
+#check class and summarize variable
+class(abortion$payment)
+table(abortion$payment)
+
+
+#Difficult life events in the 12-months leading up to the abortion
+
+#First, reclassify each individual difficult life event variable/question as a factor
+class(abortion$death)
+abortion$death<-as.factor(abortion$death)
+class(abortion$death)
+table(abortion$death)
+
+class(abortion$rent)
+abortion$rent<-as.factor(abortion$rent)
+class(abortion$rent)
+table(abortion$rent)
+
+class(abortion$breakup)
+abortion$breakup<-as.factor(abortion$breakup)
+class(abortion$breakup)
+table(abortion$breakup)
+
+class(abortion$nowork)
+abortion$nowork<-as.factor(abortion$nowork)
+class(abortion$nowork)
+table(abortion$nowork)
+
+class(abortion$fammed)
+abortion$fammed<-as.factor(abortion$fammed)
+class(abortion$fammed)
+table(abortion$fammed)
+
+class(abortion$hadbaby)
+abortion$hadbaby<-as.factor(abortion$hadbaby)
+class(abortion$hadbaby)
+table(abortion$hadbaby)
+
+class(abortion$partjail)
+abortion$partjail<-as.factor(abortion$partjail)
+class(abortion$partjail)
+table(abortion$partjail)
+
+class(abortion$moved)
+abortion$moved<-as.factor(abortion$moved)
+class(abortion$moved)
+table(abortion$moved)
+
+
+#Build binary variable based on the above difficult life events 
+
+abortion<-abortion %>%
+  mutate(dif_events_yn= case_when(
+    death=="1" ~ 1,
+    rent=="1" ~ 1,
+    breakup=="1" ~ 1,
+    nowork== "1" ~ 1, 
+    fammed=="1" ~ 1,
+    hadbaby=="1" ~ 1,
+    partjail=="1" ~ 1,
+    moved=="1" ~ 1,
+    death=="0" ~ 0,
+    rent=="0" ~ 0,
+    breakup=="0" ~ 0,
+    nowork== "0" ~ 0, 
+    fammed=="0" ~ 0,
+    hadbaby=="0" ~ 0,
+    partjail=="0" ~ 0,
+    moved=="0" ~ 0
+  ))
+class(abortion$dif_events_yn)
+
+#Convert to factor variable and apply labels; no difficult life events is the reference
+abortion$dif_events_yn<-factor(abortion$dif_events_yn, levels= c(0,1), labels = c("No difficult life events", "At least one difficult life event"))
+
+summary(abortion$dif_events_yn)
+
+#Now I'll make a count variable capturing mow many difficult life events someone has experienced
+
+#First I have to create numerical versions of each of the individual difficult life events variables, and recode the values as 0/1 instead of 1/2
+
+abortion$death_num<-as.numeric(abortion$death)
+class(abortion$death_num)
+table(abortion$death_num)
+abortion$death_num[abortion$death_num == 1] <- 0
+abortion$death_num[abortion$death_num == 2] <- 1
+table(abortion$death_num)
+class(abortion$death_num)
+
+abortion$rent_num<-as.numeric(abortion$rent)
+class(abortion$rent_num)
+table(abortion$rent_num)
+abortion$rent_num[abortion$rent_num == 1] <- 0
+abortion$rent_num[abortion$rent_num == 2] <- 1
+table(abortion$rent_num)
+class(abortion$rent_num)
+
+abortion$breakup_num<-as.numeric(abortion$breakup)
+class(abortion$breakup_num)
+table(abortion$breakup_num)
+abortion$breakup_num[abortion$breakup_num == 1] <- 0
+abortion$breakup_num[abortion$breakup_num == 2] <- 1
+table(abortion$breakup_num)
+class(abortion$breakup_num)
+
+abortion$nowork_num<-as.numeric(abortion$nowork)
+class(abortion$nowork_num)
+table(abortion$nowork_num)
+abortion$nowork_num[abortion$nowork_num == 1] <- 0
+abortion$nowork_num[abortion$nowork_num == 2] <- 1
+table(abortion$nowork_num)
+class(abortion$nowork_num)
+summary(abortion$nowork_num)
+
+
+abortion$fammed_num<-as.numeric(abortion$fammed)
+class(abortion$fammed_num)
+table(abortion$fammed_num)
+abortion$fammed_num[abortion$fammed_num == 1] <- 0
+abortion$fammed_num[abortion$fammed_num == 2] <- 1
+table(abortion$fammed_num)
+class(abortion$fammed_num)
+summary(abortion$fammed_num)
+
+abortion$hadbaby_num<-as.numeric(abortion$hadbaby)
+class(abortion$hadbaby_num)
+table(abortion$hadbaby_num)
+abortion$hadbaby_num[abortion$hadbaby_num == 1] <- 0
+abortion$hadbaby_num[abortion$hadbaby_num == 2] <- 1
+table(abortion$hadbaby_num)
+class(abortion$hadbaby_num)
+summary(abortion$hadbaby_num)
+
+
+abortion$partjail_num<-as.numeric(abortion$partjail)
+class(abortion$partjail_num)
+table(abortion$partjail_num)
+abortion$partjail_num[abortion$partjail_num == 1] <- 0
+abortion$partjail_num[abortion$partjail_num == 2] <- 1
+table(abortion$partjail_num)
+class(abortion$partjail_num)
+summary(abortion$partjail_num)
+
+
+abortion$moved_num<-as.numeric(abortion$moved)
+class(abortion$moved_num)
+table(abortion$moved_num)
+abortion$moved_num[abortion$moved_num == 1] <- 0
+abortion$moved_num[abortion$moved_num == 2] <- 1
+table(abortion$moved_num)
+class(abortion$moved_num)
+summary(abortion$moved_num)
+
+
+abortion<-abortion %>%
+  mutate(dif_events_num=(death_num+rent_num+breakup_num+nowork_num+fammed_num+hadbaby_num+partjail_num+moved_num))
+    
+summary(abortion$dif_events_num)
+table(abortion$dif_events_num)
+
+
+#Demographic variables
+
+#Age (importing the already created categorical variable)
+abortion$age_cat<-abortion$rage
+
+#mutate new variable in order to set reference grouo; convert to factor and apply labels; set 35+ as the reference group
+
+abortion<-abortion %>%
+  mutate(age_cat= case_when(
+         rage=="1" ~ 1,
+         rage=="2" ~ 2,
+         rage=="3" ~ 3,
+         rage=="4" ~ 4,
+         rage=="5" ~ 5,
+         rage=="6" ~ 0))
+  
+abortion$age_cat<-factor(abortion$age_cat, levels= c(1,2,3,4,5,0), labels = c("<15-17", "18-19", "20-24", "25-29", "30-34", "35+"))
+#35+ is the reference group
+
+summary(abortion$age_cat)
+table(abortion$age_cat)
+
+
+#Race 
+class(abortion$newraceth)
+
+#Convert to factor 
+abortion$newraceth1<-as.factor(abortion$newraceth)
+class(abortion$newraceth1)
+summary(abortion$newraceth1)
+
+#mutate new race_eth variable with collapsing two categories together (Other and Multiracial)
+abortion<-abortion %>%
+  mutate(race_eth_cat= case_when(
+    newraceth1=="1" ~ 1,
+    newraceth1=="2" ~ 2,
+    newraceth1=="3" ~ 3,
+    newraceth1=="4" ~ 0, 
+    newraceth1=="5" ~ 4,
+    newraceth1=="6" ~ 4,
+    newraceth1=="7" ~ 5
+  ))
+
+abortion$race_eth_cat<-factor(abortion$race_eth_cat, levels= c(0,1,2,3,4,5), labels = c("White", "American Indian", "API", "Black", "Other/Multiracial", "Hispanic"))
+#white is the reference group
+
+class(abortion$race_eth_cat)
+summary(abortion$race_eth_cat)
+
+
+
+#Sexual orientation 
+class(abortion$sexuality)
+
+#Recode as factor
+abortion$sexuality<-as.factor(abortion$sexuality)
+class(abortion$sexuality)
+
+abortion<-abortion %>%
+  mutate(sex_orient= case_when(
+    sexuality=="1" ~ 0,
+    sexuality=="2" ~ 1,
+    sexuality=="3" ~ 2,
+    sexuality=="4" ~ 3, 
+  ))
+
+#convert to factor and apply labels; heterosexual is the reference group
+abortion$sex_orient<-factor(abortion$sex_orient, levels= c(0,1,2,3), labels = c("Heterosexual", "Gay/Lesbian", "Bisexual", "Something else"))
+
+summary(abortion$sex_orient)
+class(abortion$sex_orient)
+
+
+#Federal poverty level categories
+abortion$poverty<-(abortion$povcat3)
+summary(abortion$poverty)
+class(abortion$poverty)
+
+abortion<-abortion %>%
+  mutate(poverty=case_when(
+    povcat3=="1" ~1,
+    povcat3=="2" ~2,
+    povcat3=="3" ~0
+  ))
+
+#convert to factor and apply labels; 200+% of FPL is the reference group
+abortion$poverty<-factor(abortion$poverty, levels= c(0,1,2), labels = c("200+% FPL", "<100% FPL", "100-200% FPL"))
+summary(abortion$poverty)
+
+
+
+#Marital status 
+abortion$marstat<-as.factor(abortion$imarstat)
+class(abortion$marstat)
+summary(abortion$marstat)
+
+abortion<-abortion %>%
+  mutate(married= case_when(
+    marstat=="1" ~ 0,
+    marstat=="2" ~ 1,
+    marstat=="3" ~ 1,
+    marstat=="4" ~ 1, 
+    marstat=="5" ~ 2
+  ))
+
+#convert to factor and apply labels; married is the reference group 
+abortion$married<-factor(abortion$married, levels= c(0,1,2), labels = c("Married", "Divorced/Widowed/Separated", "Never married"))
+
+summary(abortion$married)
+
+
+#Number of people respondent lives with (including children)
+abortion$hh_mem_num<-as.numeric(abortion$nfammem)
+table(abortion$hh_mem_num)
+
+
+#Religion
+summary(abortion$irelig)
+class(abortion$irelig)
+
+abortion<-abortion %>%
+  mutate(relig=case_when(
+    irelig=="1" ~1,
+    irelig=="2" ~2,
+    irelig=="3" ~3,
+    irelig=="4" ~4,
+    irelig=="5" ~0
+  ))
+
+#convert to factor and apply labels; no religion is reference group
+abortion$relig<-factor(abortion$relig, levels= c(0,1,2,3,4), labels = c("none", "Protestant", "Catholic", "Jewish", "Other"))
+
+class(abortion$relig)
+summary(abortion$relig)
+
+
+#Number of previous births
+abortion$pre_births<-abortion$iprebir
+class(abortion$pre_births)
+summary(abortion$pre_births)
+table(abortion$pre_births)
+
+
+#Any previous abortions (y/n)
+abortion$pre_abort<-abortion$iabort
+class(abortion$pre_abort)
+table(abortion$pre_abort)
+
+#Convert to factor and apply labels; no previous abortions is reference
+abortion$pre_abort<-factor(abortion$pre_abort, levels= c(0,1), labels= c("No previous abortion", "At least one previous abortion"))
+class(abortion$pre_abort)
+
+summary(abortion$pre_abort)
+table(abortion$pre_abort)
+
+
+#Number of previous abortions
+abortion$num_pre_abort<-abortion$nabort
+class(abortion$num_pre_abort)
+summary(abortion$num_pre_abort)
+table(abortion$num_pre_abort)
+
+
+
+#Physical violence perpetrated by father of the current pregnancy
+
+abortion<-abortion %>%
+  mutate(phys_vio=case_when(
+    manhit=="1" ~ 1,
+    manhit=="2" ~ 0
+  ))
+
+#Convert to factor and apply labels; no physical violence is reference 
+abortion$phys_vio<-factor(abortion$phys_vio, levels= c(0,1), labels= c("No", "Yes"))
+class(abortion$phys_vio)
+summary(abortion$phys_vio)
+
+
+#Sexual violence perpetrated by father of the current pregnancy
+abortion<-abortion %>%
+  mutate(sex_vio=case_when(
+    manforce=="1" ~ 1,
+    manforce=="2" ~ 0
+  ))
+
+#Convert to factor and apply labels; no sexual violence is reference
+abortion$sex_vio<-factor(abortion$sex_vio, levels= c(0,1), labels= c("No", "Yes"))
+class(abortion$sex_vio)
+summary(abortion$sex_vio)
+
+```
+
+
+
+Double checking data...
+
+```{r}
+
+#check variables in the data frame
+str(abortion)
+summary(abortion)
+
+#checking to make sure there aren't still somehow missing values. There aren't! Woohoo!
+describe(abortion)
+
+
+```
+
+Now we'll move on to running the respective MLR models. 6 total models will be run (3 unadjusted, 3 adjusted). Three different conceptualizations of Difficult life events (DLE's) will be used: whether or not someone experienced ANY DLE's in the past year (binary y/n), how many DLE's someone experienced in the past year (count), and the specific categories of DLE's someone experienced (categorical). Each of those conceptualizations of the primary exposure will be used in the unadjusted and adjusted models, respectively. 
+
+Model 1: Unadjusted (binary difficult life events)
+```{r}
+#Model 1:
+abortion_mod1 <- multinom(abortion$payment ~ abortion$dif_events_yn, data=abortion)
+summary(abortion_mod1)
+
+# z-scores
+summary_abortion_mod1 <- summary(abortion_mod1)
+z_abortion_mod1 <- summary(abortion_mod1)$coefficients/summary(abortion_mod1)$standard.errors
+z_abortion_mod1
+
+# 2-tailed z test p-values 
+p_abortion_mod1 <- (1 - pnorm(abs(z_abortion_mod1),0,1))*2
+p_abortion_mod1
+
+# OR and CIs
+abortion_mod1_xl<-tidy(abortion_mod1, conf.int=TRUE, exponentiate = TRUE)
+
+class(abortion_mod1_xl)
+abortion_mod1_xl<-as.data.frame(abortion_mod1_xl)
+
+write_xlsx(abortion_mod1_xl,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/abortion_mod1_xl.xlsx")
+```
+
+Model 2: Unadjusted (categorical difficult life events- included as binary variables)
+```{r}
+abortion_mod2 <- multinom(abortion$payment ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved, data=abortion)
+summary(abortion_mod2)
+
+# z-scores
+summary_abortion_mod2 <- summary(abortion_mod2)
+z_abortion_mod2 <- summary(abortion_mod2)$coefficients/summary(abortion_mod2)$standard.errors
+z_abortion_mod2
+
+# 2-tailed z test p-values 
+p_abortion_mod2 <- (1 - pnorm(abs(z_abortion_mod2),0,1))*2
+p_abortion_mod2
+
+# OR and CIs
+abortion_mod2_xl<-tidy(abortion_mod2, conf.int=TRUE, exponentiate = TRUE)
+
+class(abortion_mod2_xl)
+abortion_mod2_xl<-as.data.frame(abortion_mod2_xl)
+
+write_xlsx(abortion_mod2_xl,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/abortion_mod2_xl.xlsx")
+
+```
+
+
+Model 3: Unadjusted (numerical difficult life events- count)
+```{r}
+abortion_mod3 <- multinom(abortion$payment ~ abortion$dif_events_num, data=abortion)
+summary(abortion_mod3)
+
+
+# z-scores
+summary_abortion_mod3 <- summary(abortion_mod3)
+z_abortion_mod3 <- summary(abortion_mod3)$coefficients/summary(abortion_mod3)$standard.errors
+z_abortion_mod3
+
+# 2-tailed z test p-values 
+p_abortion_mod3 <- (1 - pnorm(abs(z_abortion_mod3),0,1))*2
+p_abortion_mod3
+
+# OR and CIs
+abortion_mod3_xl<-tidy(abortion_mod3, conf.int=TRUE, exponentiate = TRUE)
+
+class(abortion_mod3_xl)
+abortion_mo31_xl<-as.data.frame(abortion_mod3_xl)
+
+write_xlsx(abortion_mod3_xl,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/abortion_mod3_xl.xlsx")
+
+```
+
+
+
+Model 4: Adjusted model with binary difficult life events 
+```{r}
+abortion_mod4 <- multinom(abortion$payment ~ abortion$dif_events_yn + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig +abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, data=abortion)
+summary(abortion_mod4)
+
+# z-scores
+summary_abortion_mod4 <- summary(abortion_mod4)
+z_abortion_mod4 <- summary(abortion_mod4)$coefficients/summary(abortion_mod4)$standard.errors
+z_abortion_mod4
+
+# 2-tailed z test p-values 
+p_abortion_mod4 <- (1 - pnorm(abs(z_abortion_mod4),0,1))*2
+p_abortion_mod4
+
+# OR and CIs
+abortion_mod4_xl<-tidy(abortion_mod4, conf.int=TRUE, exponentiate = TRUE)
+
+class(abortion_mod4_xl)
+abortion_mod4_xl<-as.data.frame(abortion_mod4_xl)
+
+write_xlsx(abortion_mod4_xl,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/abortion_mod4_xl.xlsx")
+
+```
+
+
+Model 5: Adjusted model with categorical difficult life events 
+```{r}
+abortion_mod5 <- multinom(abortion$payment ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig +abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, data=abortion)
+summary(abortion_mod5)
+
+# z-scores
+summary_abortion_mod5 <- summary(abortion_mod5)
+z_abortion_mod5 <- summary(abortion_mod5)$coefficients/summary(abortion_mod5)$standard.errors
+z_abortion_mod5
+
+# 2-tailed z test p-values 
+p_abortion_mod5 <- (1 - pnorm(abs(z_abortion_mod5),0,1))*2
+p_abortion_mod5
+
+# OR and CIs
+abortion_mod5_xl<-tidy(abortion_mod5, conf.int=TRUE, exponentiate = TRUE)
+
+class(abortion_mod5_xl)
+abortion_mod5_xl<-as.data.frame(abortion_mod5_xl)
+
+write_xlsx(abortion_mod5_xl,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/abortion_mod5_xl.xlsx")
+
+```
+
+
+Model 6: Adjusted model with numerical difficult life events- count
+```{r}
+abortion_mod6 <- multinom(abortion$payment ~ abortion$dif_events_num + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig +abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, data=abortion)
+summary(abortion_mod6)
+
+# z-scores
+summary_abortion_mod6 <- summary(abortion_mod6)
+z_abortion_mod6 <- summary(abortion_mod6)$coefficients/summary(abortion_mod6)$standard.errors
+z_abortion_mod6
+
+# 2-tailed z test p-values 
+p_abortion_mod6 <- (1 - pnorm(abs(z_abortion_mod6),0,1))*2
+p_abortion_mod6
+
+# OR and CIs
+abortion_mod6_xl<-tidy(abortion_mod6, conf.int=TRUE, exponentiate = TRUE)
+
+class(abortion_mod6_xl)
+abortion_mod6_xl<-as.data.frame(abortion_mod6_xl)
+
+write_xlsx(abortion_mod6_xl,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/abortion_mod6_xl.xlsx")
+
+```
+
+Look neatly at all models...
+```{r}
+tidy(abortion_mod1, conf.int=TRUE, exponentiate = TRUE)
+tidy(abortion_mod2, conf.int=TRUE, exponentiate = TRUE)
+tidy(abortion_mod3, conf.int=TRUE, exponentiate = TRUE)
+tidy(abortion_mod4, conf.int=TRUE, exponentiate = TRUE)
+tidy(abortion_mod5, conf.int=TRUE, exponentiate = TRUE)
+tidy(abortion_mod6, conf.int=TRUE, exponentiate = TRUE)
+
+
+
+```
+
+
+Write models to excel sheets for easy export 
+```{r}
+install.packages("writexl")
+library(writexl)
+
+
+mod1_df<-tidy(abortion_mod1, conf.int=TRUE, exponentiate = TRUE)
+write_xlsx(mod1_df,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/mod1.xlsx")
+
+mod2_df<-tidy(abortion_mod2, conf.int=TRUE, exponentiate = TRUE)
+write_xlsx(mod2_df,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/mod2.xlsx")
+
+mod3_df<-tidy(abortion_mod3, conf.int=TRUE, exponentiate = TRUE)
+write_xlsx(mod3_df,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/mod3.xlsx")
+
+mod4_df<-tidy(abortion_mod4, conf.int=TRUE, exponentiate = TRUE)
+write_xlsx(mod4_df,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/mod4.xlsx")
+
+mod5_df<-tidy(abortion_mod5, conf.int=TRUE, exponentiate = TRUE)
+write_xlsx(mod5_df,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/mod5.xlsx")
+
+mod6_df<-tidy(abortion_mod6, conf.int=TRUE, exponentiate = TRUE)
+write_xlsx(mod6_df,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/mod6.xlsx")
+
+```
+
+
+Creating binary models in order to be able to test for multicollinearity and Cook's distances 
+```{r}
+#Make binary variables for payment types for multicollinearity and Cook's distance testing (can't use raw data categories because some are combined)
+
+#Medicaid
+abortion<-abortion%>%
+    mutate(medicaid=case_when(
+      payreimb=="1" ~ 0, 
+      payins=="1" ~ 0,
+      paymcaid=="1" ~ 1,
+      payself=="1" ~ 0, 
+      payasst=="1" ~ 0,
+      paycut=="1" ~ 0, 
+      payotro=="1" ~ 0,
+      payotrob=="1" ~ 0,
+      payotrob=="3" ~ 0,
+      payotrob=="4" ~ 0
+    ))
+table(abortion$medicaid)
+
+
+#Private insurance
+abortion<-abortion%>%
+    mutate(insurance=case_when(
+      payreimb=="1" ~ 1, 
+      payins=="1" ~ 1,
+      paymcaid=="1" ~ 0,
+      payself=="1" ~ 0, 
+      payasst=="1" ~ 0,
+      paycut=="1" ~ 0, 
+      payotro=="1" ~ 0,
+      payotrob=="1" ~ 0,
+      payotrob=="3" ~ 0,
+      payotrob=="4" ~ 0
+    ))
+table(abortion$insurance)
+
+#Self/out of pocket
+abortion<-abortion%>%
+    mutate(selfpay=case_when(
+      payreimb=="1" ~ 0, 
+      payins=="1" ~ 0,
+      paymcaid=="1" ~ 0,
+      payself=="1" ~ 1, 
+      payasst=="1" ~ 0,
+      paycut=="1" ~ 0, 
+      payotro=="1" ~ 0,
+      payotrob=="1" ~ 0,
+      payotrob=="3" ~ 0,
+      payotrob=="4" ~ 0
+    ))
+table(abortion$selfpay)
+
+#Pay assistance
+abortion<-abortion%>%
+    mutate(payassist=case_when(
+      payreimb=="1" ~ 0, 
+      payins=="1" ~ 0,
+      paymcaid=="1" ~ 0,
+      payself=="1" ~ 0, 
+      payasst=="1" ~ 1,
+      paycut=="1" ~ 0, 
+      payotro=="1" ~ 0,
+      payotrob=="1" ~ 0,
+      payotrob=="3" ~ 0,
+      payotrob=="4" ~ 0
+    ))
+table(abortion$payassist)
+
+#Price reduction
+abortion<-abortion%>%
+    mutate(pricered=case_when(
+      payreimb=="1" ~ 0, 
+      payins=="1" ~ 0,
+      paymcaid=="1" ~ 0,
+      payself=="1" ~ 0, 
+      payasst=="1" ~ 0,
+      paycut=="1" ~ 1, 
+      payotro=="1" ~ 0,
+      payotrob=="1" ~ 0,
+      payotrob=="3" ~ 0,
+      payotrob=="4" ~ 0
+    ))
+table(abortion$pricered)
+
+#Other (friends/family/other loan)
+abortion<-abortion%>%
+    mutate(other=case_when(
+      payreimb=="1" ~ 0, 
+      payins=="1" ~ 0,
+      paymcaid=="1" ~ 0,
+      payself=="1" ~ 0, 
+      payasst=="1" ~ 0,
+      paycut=="1" ~ 0, 
+      payotro=="1" ~ 1,
+      payotrob=="1" ~ 1,
+      payotrob=="3" ~ 1,
+      payotrob=="4" ~ 1
+    ))
+table(abortion$other)
+
+
+#Making binary models for each payment method outcome and with the three conceptualizations of difficult life events from above (by number of difficult life events, whether or not someone experienced any difficult life events, and the individual types of difficult life events)
+
+#Medicaid as outcome
+abortion1.1_bin_test<- glm(abortion$medicaid ~ abortion$dif_events_yn + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion1.2_bin_test<- glm(abortion$medicaid ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion1.3_bin_test<- glm(abortion$medicaid ~ abortion$dif_events_num + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+
+#Private Insurance
+abortion2.1_bin_test<- glm(abortion$insurance ~ abortion$dif_events_yn + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion2.2_bin_test<- glm(abortion$insurance ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion2.3_bin_test<- glm(abortion$insurance ~ abortion$dif_events_num + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+
+#Self/out of pocket
+abortion3.1_bin_test<- glm(abortion$selfpay ~ abortion$dif_events_yn + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion3.2_bin_test<- glm(abortion$selfpay ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion3.3_bin_test<- glm(abortion$selfpay ~ abortion$dif_events_num + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+#Receiving financial assistance
+abortion4.1_bin_test<- glm(abortion$payassist ~ abortion$dif_events_yn + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion4.2_bin_test<- glm(abortion$payassist ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion4.3_bin_test<- glm(abortion$payassist ~ abortion$dif_events_num + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+#Qualified for a price reduction
+abortion5.1_bin_test<- glm(abortion$pricered ~ abortion$dif_events_yn + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion5.2_bin_test<- glm(abortion$pricered ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion5.3_bin_test<- glm(abortion$pricered ~ abortion$dif_events_num + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+#Other (friends/family/partner/loan)
+abortion6.1_bin_test<- glm(abortion$other ~ abortion$dif_events_yn + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion6.2_bin_test<- glm(abortion$other ~ abortion$death + abortion$rent + abortion$breakup + abortion$nowork + abortion$fammed + abortion$hadbaby + abortion$partjail + abortion$moved + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+abortion6.3_bin_test<- glm(abortion$other ~ abortion$dif_events_num + abortion$poverty + abortion$age_cat + abortion$race_eth_cat + abortion$sex_orient + abortion$married + abortion$hh_mem_num + abortion$relig + abortion$pre_births + abortion$pre_abort + abortion$phys_vio + abortion$sex_vio, family="binomial")
+
+```
+
+
+Testing assumptions: Linearity (Box-Tidwell)
+```{r}
+#only two variables need to be tested: number of previous births and number of people in the household
+
+abortion <- abortion %>%
+  mutate(hh_mem_boxtidwell = hh_mem_num * log(hh_mem_num)) # create term to test linearity
+
+abortion_boxtid_test1 <- glm(payment ~ hh_mem_num + hh_mem_boxtidwell, data=abortion, family="binomial") 
+
+summary(abortion_boxtid_test1)
+#The linearity assumption is not violated because the p value for the coefficient is greater than 0.05, and is therefore insignificant. This means we can leave the variable hh_mem_num as-is, and it doesn't need to be converted to categorical. 
+
+abortion <- abortion %>%
+  mutate(pre_births_boxtidwell = pre_births * log(pre_births)) # create term to test linearity
+
+abortion_boxtid_test2 <- glm(payment ~ pre_births + pre_births_boxtidwell, data=abortion, family="binomial") 
+
+summary(abortion_boxtid_test2)
+#The linearity assumption is not violated because the p value for the coefficient is greater than 0.05, and is therefore insignificant. This means we can leave the variable pre_births as-is, and it doesn't need to be converted to categorical. 
+
+
+abortion <- abortion %>%
+  mutate(dif_events_boxtidwell = dif_events_num * log(dif_events_num)) # create term to test linearity
+
+abortion_boxtid_test3 <- glm(payment ~ dif_events_num + dif_events_boxtidwell, data=abortion, family="binomial") 
+
+summary(abortion_boxtid_test3)
+#The linearity assumption is not violated because the p value for the coefficient is greater than 0.05, and is therefore insignificant. This means we can leave the variable dif_events_num as-is, and it doesn't need to be converted to categorical. 
+
+```
+
+
+
+Testing assumptions: Multicollinearity (VIFs)
+```{r}
+#Using the binary models because it wasn't working when I tried to run VIFs on the six MLR models
+
+vif(abortion1.1_bin_test)
+vif(abortion1.2_bin_test)
+vif(abortion1.3_bin_test)
+vif(abortion2.1_bin_test)
+vif(abortion2.2_bin_test)
+vif(abortion2.3_bin_test)
+vif(abortion3.1_bin_test)
+vif(abortion3.2_bin_test)
+vif(abortion3.3_bin_test)
+vif(abortion4.1_bin_test)
+vif(abortion4.2_bin_test)
+vif(abortion4.3_bin_test)
+vif(abortion5.1_bin_test)
+vif(abortion5.2_bin_test)
+vif(abortion5.3_bin_test)
+vif(abortion6.1_bin_test)
+vif(abortion6.2_bin_test)
+vif(abortion6.3_bin_test)
+
+#All models look good! No VIFs are over 2
+
+```
+
+
+Testing assumptions: Outliers (Cook's Distances)
+```{r}
+
+# Plot Cook's Distance
+
+plot(abortion1.1_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion1.2_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion1.3_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion2.1_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion2.2_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion2.3_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion3.1_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion3.2_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion3.3_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion4.1_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion4.2_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion4.3_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion5.1_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion5.2_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion5.3_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion6.1_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion6.2_bin_test, which = 4, id.n = 3, col="red") 
+plot(abortion6.3_bin_test, which = 4, id.n = 3, col="red") 
+
+#No Cook's distances are above 0.05. No observations will be removed
+
+
+```
+
+
+
+Making Table 1
+```{r}
+
+library(table1)
+
+table1(~dif_events_yn + age_cat + race_eth_cat + sex_orient  + poverty + married + hh_mem_num + relig + pre_births + pre_abort + phys_vio + sex_vio | payment, abortion)
+
+label(abortion$dif_events_yn)<-"Difficult Life Events"
+label(abortion$age_cat)<-"Age"
+label(abortion$race_eth_cat)<-"Race/Ethnicity"
+label(abortion$sex_orient)<-"Sexual Orientation"
+label(abortion$poverty)<-"Poverty Level"
+label(abortion$married)<-"Marital Status"
+label(abortion$hh_mem_num)<-"Number of household members"
+label(abortion$relig)<-"Religion"
+label(abortion$pre_births)<-"Previous births"
+label(abortion$pre_abort)<-"Previous abortions"
+label(abortion$phys_vio)<-"Experienced physical IPV"
+label(abortion$sex_vio)<-"Experienced sexual IPV"
+label(abortion$payment)<-"Payment method"
+label(abortion$death)<-"Death of family member or friend"
+label(abortion$rent)<-"Fell behind on rent/mortgage"
+label(abortion$breakup)<-"Broke up with partner/spouse"
+label(abortion$nowork)<-"Unemployed 1+ month"
+label(abortion$fammed)<-"Family member with medical condition"
+label(abortion$hadbaby)<-"Had a baby"
+label(abortion$partjail)<-"Partner incarceration"
+label(abortion$moved)<-"Moved 2+ times"
+
+#Label values for DLEs
+abortion$death <- factor(abortion$death,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+abortion$rent <- factor(abortion$rent,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+abortion$breakup <- factor(abortion$breakup,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+abortion$nowork <- factor(abortion$nowork,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+abortion$fammed <- factor(abortion$fammed,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+abortion$hadbaby <- factor(abortion$hadbaby,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+abortion$partjail <- factor(abortion$partjail,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+abortion$moved <- factor(abortion$moved,
+levels = c(0,1),
+labels = c("No", "Yes"))
+
+
+#Full Table 1
+table1<-table1(~dif_events_yn + age_cat + race_eth_cat + sex_orient  + poverty + married + hh_mem_num + relig + pre_births + pre_abort + phys_vio + sex_vio | payment, abortion)
+
+table1
+
+
+#Reduced versions of Table 1 for powerpoint (because otherwise table 1 is huge... dropping variables that are not as interesting/significant to talk about)
+
+library(writexl)
+
+#Table 1 Just with DLEs
+table1_dle_red<-table1(~dif_events_yn + death + rent + breakup + nowork + fammed + hadbaby + partjail + moved | payment, abortion)
+
+table1_dle_red<-as.data.frame(table1_dle_red)
+
+write_xlsx(table1_dle_red,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/table1_dle_red.xlsx")
+
+#Table 1 with demographics
+table1_red<-table1(~dif_events_yn + race_eth_cat + sex_orient + poverty + married + relig + pre_abort | payment, abortion)
+
+table1_red<-as.data.frame(table1_red)
+
+write_xlsx(table1_red,"/Users/samanthamcnelly/Desktop/Documents/Fall 2022/Advanced Data Analysis/Project/table1_red.xlsx")
+
+
+```
+
+
+
+Sensitivity Analysis of Imputed Data 
+```{r}
+
+#Model 5 on non-imputed data (this is the most complete model, so looking at this)
+abortion_mod5_old <- multinom(abortion_old$payment ~ abortion_old$death + abortion_old$rent + abortion_old$breakup + abortion_old$nowork + abortion_old$fammed + abortion_old$hadbaby + abortion_old$partjail + abortion_old$moved + abortion_old$poverty + abortion_old$age_cat + abortion_old$race_eth_cat + abortion_old$sex_orient + abortion_old$married + abortion_old$hh_mem_num + abortion_old$relig +abortion_old$pre_births + abortion_old$pre_abort + abortion_old$phys_vio + abortion_old$sex_vio, data=abortion_old)
+summary(abortion_mod5_old)
+
+# z-scores
+summary_abortion_mod5_old <- summary(abortion_mod5_old)
+z_abortion_mod5_old <- summary(abortion_mod5_old)$coefficients/summary(abortion_mod5_old)$standard.errors
+z_abortion_mod5_old
+
+# 2-tailed z test p-values 
+p_abortion_mod5_old <- (1 - pnorm(abs(z_abortion_mod5_old),0,1))*2
+p_abortion_mod5_old
+
+# OR and CIs (comparing model 5 on the imputed and non-imputed data)
+tidy(abortion_mod5_old, conf.int=TRUE, exponentiate = TRUE)
+tidy(abortion_mod5, conf.int=TRUE, exponentiate = TRUE)
+
+
+#While some estimates for these models varied slightly from those using imputed data, the differences are not significant (note that a couple of the variables have different reference categories assigned between the imputed and non-imputed data sets, but none of the imputed variables differ, so they are still comparable). 
+```
+
+I think that's everything! 
+
